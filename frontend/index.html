@@ -13,7 +13,7 @@
 </head>
 
 <body>
-    
+
     <main>
         <div id="vinheta">
             <img src="image/safetalk_gif.gif" alt="Telefone se mexendo">
@@ -41,12 +41,22 @@
                 <img src="image/safetalkImg.png" alt="">
                 <h1>SafeTalk</h1>
             </div>
+            <button id="call-btn" class="button-logar">Entrar em chamada</button>
+            <button id="leave-call-btn" onclick="sairDaChamada()">❌ Sair da Chamada</button>
+
+
             <div id="usu-onli">
                 <h2>Usuários Online</h2>
                 <ul id="online-users"></ul>
             </div>
         </div>
+        <div id="video-call">
+            <video id="local-video" autoplay muted></video>
+            <video id="remote-video" autoplay></video>
+        </div>
         <ul id="messages"></ul>
+
+
         <div id="typing-status"></div>
 
     </main>
@@ -89,13 +99,35 @@
         const startChatBtn = document.getElementById('start-chat-btn');
         const sendMessageBtn = document.getElementById('send-message-btn');
         const onlineUsersList = document.getElementById('online-users');
+        const callBtn = document.getElementById('call-btn');
+        const main = document.querySelector('main');
+        const localVideo = document.getElementById('local-video');
+        const remoteVideo = document.getElementById('remote-video');
+        let peerConnection;
         let typingTimeout;
-        let userName = ""; 
+        let userName = "";
 
         // Abrir o seletor de arquivos quando o botão for clicado
         imageBtn.addEventListener('click', () => {
             imageInput.click();
         });
+
+        function sairDaChamada() {
+            const wrapper = document.querySelector('.chat-wrapper');
+            wrapper.classList.remove('on-call');
+
+            // Opcional: parar o vídeo
+            const video = document.querySelector('#call-container video');
+            if (video && video.srcObject) {
+                const tracks = video.srcObject.getTracks();
+                tracks.forEach(track => track.stop());
+                video.srcObject = null;
+            }
+
+            // Ocultar o container de chamada
+            document.getElementById('call-container').style.display = 'none';
+        }
+
 
         socket.on('image', (data) => {
             const li = document.createElement('li');
@@ -200,7 +232,7 @@
             }
         });
         input.addEventListener('input', () => {
-            clearTimeout(typingTimeout); 
+            clearTimeout(typingTimeout);
             socket.emit('typing', userName);
             typingTimeout = setTimeout(() => {
                 socket.emit('stopTyping');
@@ -249,6 +281,70 @@
                 li.textContent = user;
                 onlineUsersList.appendChild(li);
             });
+        });
+        callBtn.addEventListener('click', async () => {
+            main.classList.add('call-active');
+
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = stream;
+
+            peerConnection = new RTCPeerConnection();
+
+            stream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, stream);
+            });
+
+            peerConnection.ontrack = (event) => {
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            // Cria uma oferta e envia via socket
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+
+            socket.emit("offer", { offer, name: userName });
+        });
+
+        // Receber oferta
+        socket.on("offer", async ({ offer, name }) => {
+            main.classList.add('call-active');
+
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = stream;
+
+            peerConnection = new RTCPeerConnection();
+
+            stream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, stream);
+            });
+
+            peerConnection.ontrack = (event) => {
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            socket.emit("answer", { answer, name: userName });
+        });
+
+        // Receber resposta
+        socket.on("answer", async ({ answer }) => {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        // ICE Candidates
+        peerConnection?.addEventListener("icecandidate", event => {
+            if (event.candidate) {
+                socket.emit("candidate", { candidate: event.candidate, name: userName });
+            }
+        });
+
+        socket.on("candidate", async ({ candidate }) => {
+            if (candidate && peerConnection) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            }
         });
     </script>
 </body>
